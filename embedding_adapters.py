@@ -297,7 +297,10 @@ def create_embedding_adapter(
     工厂函数：根据 interface_format 返回不同的 embedding 适配器实例
     """
     fmt = interface_format.strip().lower()
+    print('fmt --------', fmt)
     if fmt == "openai":
+        return OpenAIEmbeddingAdapter(api_key, base_url, model_name)
+    elif fmt == "deepseek":
         return OpenAIEmbeddingAdapter(api_key, base_url, model_name)
     elif fmt == "azure openai":
         return AzureOpenAIEmbeddingAdapter(api_key, base_url, model_name)
