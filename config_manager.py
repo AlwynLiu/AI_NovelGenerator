@@ -59,6 +59,7 @@ def test_embedding_config(api_key, base_url, interface_format, model_name, log_f
     def task():
         try:
             log_func("开始测试Embedding配置...")
+            print(interface_format, api_key, base_url, model_name)
             embedding_adapter = create_embedding_adapter(
                 interface_format=interface_format,
                 api_key=api_key,

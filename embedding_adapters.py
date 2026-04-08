@@ -34,17 +34,122 @@ class OpenAIEmbeddingAdapter(BaseEmbeddingAdapter):
     基于 OpenAIEmbeddings（或兼容接口）的适配器
     """
     def __init__(self, api_key: str, base_url: str, model_name: str):
-        self._embedding = OpenAIEmbeddings(
-            openai_api_key=api_key,
-            openai_api_base=ensure_openai_base_url_has_v1(base_url),
-            model=model_name
-        )
+        self.api_key = api_key
+        self.base_url = ensure_openai_base_url_has_v1(base_url)
+        self.model_name = model_name
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        return self._embedding.embed_documents(texts)
+        # 确保所有文本都是字符串类型
+        string_texts = [str(text) for text in texts]
+        url = self.base_url + "/embeddings"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "model": self.model_name,
+            "input": string_texts
+        }
+        try:
+            response = requests.post(url, headers=headers, json=data)
+            response.raise_for_status()
+            result = response.json()
+            if "data" not in result:
+                raise ValueError("No 'data' field in response")
+            return [item.get("embedding", []) for item in result["data"]]
+        except requests.exceptions.RequestException as e:
+            logging.error(f"OpenAI embeddings request error: {e}\n{traceback.format_exc()}")
+            return []
 
     def embed_query(self, query: str) -> List[float]:
-        return self._embedding.embed_query(query)
+        # 确保查询是字符串类型
+        string_query = str(query)
+        url = self.base_url + "/embeddings"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "model": self.model_name,
+            "input": string_query
+        }
+        try:
+            response = requests.post(url, headers=headers, json=data)
+            response.raise_for_status()
+            result = response.json()
+            if "data" not in result or not result["data"]:
+                raise ValueError("No 'data' field in response")
+            return result["data"][0].get("embedding", [])
+        except requests.exceptions.RequestException as e:
+            logging.error(f"OpenAI embeddings request error: {e}\n{traceback.format_exc()}")
+            return []
+
+class VolcanoEngineEmbeddingAdapter(BaseEmbeddingAdapter):
+    """
+    基于火山引擎官方 SDK 的适配器
+    """
+    def __init__(self, api_key: str, base_url: str, model_name: str):
+        from volcenginesdkarkruntime import Ark
+        self.ark = Ark(
+            api_key=api_key)
+        self.model_name = model_name
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        # 确保所有文本都是字符串类型
+        string_texts = str(text)
+        try:
+            embeddings = []
+            for text in string_texts:
+                # 构建正确的输入格式
+                input_data = [{
+                    "type": "text",
+                    "text": text
+                }]
+                response = self.ark.multimodal_embeddings.create(
+                    model=self.model_name,
+                    input=input_data
+                )
+                if response and response.data:
+                    # 检查 response.data 是否有 embedding 属性
+                    if hasattr(response.data, 'embedding'):
+                        embeddings.append(response.data.embedding)
+                    else:
+                        # 尝试其他可能的属性或方法
+                        logging.warning(f"Unexpected response.data type: {type(response.data)}")
+                        embeddings.append([])
+                else:
+                    embeddings.append([])
+            return embeddings
+        except Exception as e:
+            logging.error(f"Volcano Engine embeddings request error: {e}\n{traceback.format_exc()}")
+            return []
+
+    def embed_query(self, query: str) -> List[float]:
+        # 确保查询是字符串类型
+        string_query = str(query)
+        try:
+            # 构建正确的输入格式
+            input_data = [{
+                "type": "text",
+                "text": string_query
+            }]
+            response = self.ark.multimodal_embeddings.create(
+                model=self.model_name,
+                input=input_data
+            )
+            if response and response.data:
+                # 检查 response.data 是否有 embedding 属性
+                if hasattr(response.data, 'embedding'):
+                    return response.data.embedding
+                else:
+                    # 尝试其他可能的属性或方法
+                    logging.warning(f"Unexpected response.data type: {type(response.data)}")
+                    return []
+            else:
+                return []
+        except Exception as e:
+            logging.error(f"Volcano Engine embeddings request error: {e}\n{traceback.format_exc()}")
+            return []
 
 class AzureOpenAIEmbeddingAdapter(BaseEmbeddingAdapter):
     """
@@ -68,10 +173,14 @@ class AzureOpenAIEmbeddingAdapter(BaseEmbeddingAdapter):
         )
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        return self._embedding.embed_documents(texts)
+        # 确保所有文本都是字符串类型
+        string_texts = [str(text) for text in texts]
+        return self._embedding.embed_documents(string_texts)
 
     def embed_query(self, query: str) -> List[float]:
-        return self._embedding.embed_query(query)
+        # 确保查询是字符串类型
+        string_query = str(query)
+        return self._embedding.embed_query(string_query)
 
 class OllamaEmbeddingAdapter(BaseEmbeddingAdapter):
     """
@@ -296,7 +405,9 @@ def create_embedding_adapter(
     """
     工厂函数：根据 interface_format 返回不同的 embedding 适配器实例
     """
+    original_interface_format = interface_format
     fmt = interface_format.strip().lower()
+    print('Original interface_format:', original_interface_format)
     print('fmt --------', fmt)
     if fmt == "openai":
         return OpenAIEmbeddingAdapter(api_key, base_url, model_name)
@@ -312,5 +423,7 @@ def create_embedding_adapter(
         return GeminiEmbeddingAdapter(api_key, model_name, base_url)
     elif fmt == "siliconflow":
         return SiliconFlowEmbeddingAdapter(api_key, base_url, model_name)
+    elif "火山引擎" in original_interface_format or "volcano" in fmt:
+        return VolcanoEngineEmbeddingAdapter(api_key, base_url, model_name)
     else:
         raise ValueError(f"Unknown embedding interface_format: {interface_format}")

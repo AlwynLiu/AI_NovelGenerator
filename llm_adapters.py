@@ -3,10 +3,10 @@
 import logging
 from typing import Optional
 from langchain_openai import ChatOpenAI, AzureChatOpenAI
-# from google import genai
-import google.generativeai as genai
+from google import genai
+# import google.generativeai as genai
 # from google.genai import types
-from google.generativeai import types
+# from google.generativeai import types
 from azure.ai.inference import ChatCompletionsClient
 from azure.core.credentials import AzureKeyCredential
 from azure.ai.inference.models import SystemMessage, UserMessage
