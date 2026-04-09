@@ -96,31 +96,33 @@ class VolcanoEngineEmbeddingAdapter(BaseEmbeddingAdapter):
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         # 确保所有文本都是字符串类型
-        string_texts = [str(text) for text in texts]
+        string_texts = str(text)
         try:
-            # 构建批量输入格式
-            input_data = [{"type": "text", "text": text} for text in string_texts]
-            
-            response = self.ark.multimodal_embeddings.create(
-                model=self.model_name,
-                input=input_data
-            )
-            
-            if response and response.data:
-                # 假设 response.data 是列表
-                embeddings = []
-                for item in response.data:
-                    if hasattr(item, 'embedding'):
-                        embeddings.append(item.embedding)
+            embeddings = []
+            for text in string_texts:
+                # 构建正确的输入格式
+                input_data = [{
+                    "type": "text",
+                    "text": text
+                }]
+                response = self.ark.multimodal_embeddings.create(
+                    model=self.model_name,
+                    input=input_data
+                )
+                if response and response.data:
+                    # 检查 response.data 是否有 embedding 属性
+                    if hasattr(response.data, 'embedding'):
+                        embeddings.append(response.data.embedding)
                     else:
-                        logging.warning(f"Unexpected item type: {type(item)}")
+                        # 尝试其他可能的属性或方法
+                        logging.warning(f"Unexpected response.data type: {type(response.data)}")
                         embeddings.append([])
-                return embeddings
-            else:
-                return [[]] * len(string_texts)
+                else:
+                    embeddings.append([])
+            return embeddings
         except Exception as e:
             logging.error(f"Volcano Engine embeddings request error: {e}\n{traceback.format_exc()}")
-            return [[]] * len(string_texts)
+            return []
 
     def embed_query(self, query: str) -> List[float]:
         # 确保查询是字符串类型
