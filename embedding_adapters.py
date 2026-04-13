@@ -107,10 +107,19 @@ class VolcanoEngineEmbeddingAdapter(BaseEmbeddingAdapter):
             )
             
             if response and response.data:
-                # 假设 response.data 是列表
+                # 处理 response.data 可能是元组列表的情况
                 embeddings = []
                 for item in response.data:
-                    if hasattr(item, 'embedding'):
+                    # 检查 item 是否是元组
+                    if isinstance(item, tuple):
+                        # 处理元组结构：('embedding', [嵌入向量])
+                        if len(item) == 2 and item[0] == 'embedding' and isinstance(item[1], list):
+                            embeddings.append(item[1])
+                        else:
+                            logging.warning(f"Unexpected tuple structure: {item}")
+                            embeddings.append([])
+                    elif hasattr(item, 'embedding'):
+                        # 正常情况：item 是具有 embedding 属性的对象
                         embeddings.append(item.embedding)
                     else:
                         logging.warning(f"Unexpected item type: {type(item)}")
@@ -136,8 +145,16 @@ class VolcanoEngineEmbeddingAdapter(BaseEmbeddingAdapter):
                 input=input_data
             )
             if response and response.data:
-                # 检查 response.data 是否有 embedding 属性
-                if hasattr(response.data, 'embedding'):
+                # 检查 response.data 是否是元组
+                if isinstance(response.data, tuple):
+                    # 处理元组结构：('embedding', [嵌入向量])
+                    if len(response.data) == 2 and response.data[0] == 'embedding' and isinstance(response.data[1], list):
+                        return response.data[1]
+                    else:
+                        logging.warning(f"Unexpected tuple structure: {response.data}")
+                        return []
+                elif hasattr(response.data, 'embedding'):
+                    # 正常情况：response.data 是具有 embedding 属性的对象
                     return response.data.embedding
                 else:
                     # 尝试其他可能的属性或方法
