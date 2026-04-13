@@ -21,7 +21,7 @@ def advanced_split_content(content: str, similarity_threshold: float = 0.7, max_
     """使用基本分段策略"""
     # nltk.download('punkt', quiet=True)
     # nltk.download('punkt_tab', quiet=True)
-    sentences = jieba.lcut(content)
+    sentences = jieba.cut(content)
     if not sentences:
         return []
 

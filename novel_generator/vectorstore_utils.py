@@ -146,7 +146,7 @@ def split_text_for_vectorstore(chapter_text: str, max_length: int = 500, similar
     if not chapter_text.strip():
         return []
     
-    sentences = jieba.lcut(chapter_text)
+    sentences = jieba.cut(chapter_text)
     if not sentences:
         return []
     
