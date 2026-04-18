@@ -109,21 +109,36 @@ class VolcanoEngineEmbeddingAdapter(BaseEmbeddingAdapter):
             if response and response.data:
                 # 处理 response.data 可能是元组列表的情况
                 embeddings = []
+                embedding_count = 0
+                
                 for item in response.data:
                     # 检查 item 是否是元组
                     if isinstance(item, tuple):
                         # 处理元组结构：('embedding', [嵌入向量])
                         if len(item) == 2 and item[0] == 'embedding' and isinstance(item[1], list):
                             embeddings.append(item[1])
+                            embedding_count += 1
+                            # 只处理与输入文本数量相同的嵌入向量
+                            if embedding_count == len(string_texts):
+                                break
                         else:
-                            logging.warning(f"Unexpected tuple structure: {item}")
-                            embeddings.append([])
+                            # 忽略其他类型的元组
+                            pass
                     elif hasattr(item, 'embedding'):
                         # 正常情况：item 是具有 embedding 属性的对象
                         embeddings.append(item.embedding)
+                        embedding_count += 1
+                        # 只处理与输入文本数量相同的嵌入向量
+                        if embedding_count == len(string_texts):
+                            break
                     else:
-                        logging.warning(f"Unexpected item type: {type(item)}")
-                        embeddings.append([])
+                        # 忽略其他类型的项目
+                        pass
+                
+                # 确保 embeddings 列表的长度与输入文本数量一致
+                while len(embeddings) < len(string_texts):
+                    embeddings.append([])
+                
                 return embeddings
             else:
                 return [[]] * len(string_texts)
@@ -145,9 +160,23 @@ class VolcanoEngineEmbeddingAdapter(BaseEmbeddingAdapter):
                 input=input_data
             )
             if response and response.data:
-                # 检查 response.data 是否是元组
-                if isinstance(response.data, tuple):
-                    # 处理元组结构：('embedding', [嵌入向量])
+                # 检查 response.data 是否是列表或元组
+                if isinstance(response.data, (list, tuple)):
+                    # 遍历列表或元组中的元素
+                    for item in response.data:
+                        # 检查 item 是否是元组
+                        if isinstance(item, tuple):
+                            # 处理元组结构：('embedding', [嵌入向量])
+                            if len(item) == 2 and item[0] == 'embedding' and isinstance(item[1], list):
+                                return item[1]
+                        elif hasattr(item, 'embedding'):
+                            # 正常情况：item 是具有 embedding 属性的对象
+                            return item.embedding
+                    # 如果没有找到嵌入向量
+                    logging.warning(f"No embedding found in response.data: {response.data}")
+                    return []
+                elif isinstance(response.data, tuple):
+                    # 处理单个元组的情况
                     if len(response.data) == 2 and response.data[0] == 'embedding' and isinstance(response.data[1], list):
                         return response.data[1]
                     else:
