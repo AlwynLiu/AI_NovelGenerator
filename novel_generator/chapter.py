@@ -10,7 +10,9 @@ import re  # 添加re模块导入
 from llm_adapters import create_llm_adapter
 from prompt_definitions import (
     first_chapter_draft_prompt, 
-    next_chapter_draft_prompt, 
+    next_chapter_draft_prompt,
+    Fanqie_Apporvel_Prompt,
+    chapter_draft_prompt_pro_prompt,
     summarize_recent_chapters_prompt,
     knowledge_filter_prompt,
     knowledge_search_prompt
@@ -575,7 +577,37 @@ def generate_chapter_draft(
         timeout=timeout
     )
 
+    # new_prompt_str = chapter_draft_prompt_pro_prompt.format(
+    #     pre_prompt_str=prompt_text
+    # )
+    # print('new_prompt_str--------------', new_prompt_str)
+    #
+    # # 预处理压缩提示词
+    # new_prompt_str_result = invoke_with_cleaning(llm_adapter, new_prompt_str)
+
     chapter_content = invoke_with_cleaning(llm_adapter, prompt_text)
+
+    print('chapter_content--------------', chapter_content)
+
+    # 导入改稿提示词
+    # from .prompt_definitions import Fanqie_Edit_Prompt, Fanqie_Style_Edit_Prompt
+    
+    # # 第一次改稿：全面改稿
+    # edit_prompt = Fanqie_Edit_Prompt.format(chapter_content=chapter_content)
+    # chapter_content = invoke_with_cleaning(llm_adapter, edit_prompt)
+    # print('first_edited_chapter_content--------------', chapter_content)
+    
+    # # 第二次改稿：小幅度风格调整
+    # style_edit_prompt = Fanqie_Style_Edit_Prompt.format(chapter_content=chapter_content)
+    # chapter_content = invoke_with_cleaning(llm_adapter, style_edit_prompt)
+    # print('style_edited_chapter_content--------------', chapter_content)
+
+    # 添加审稿提示词
+    # review_content = Fanqie_Apporvel_Prompt.format(
+    #     pre_prompt_str=chapter_content
+    # )
+    #
+    # chapter_review_content = invoke_with_cleaning(llm_adapter, review_content)
     if not chapter_content.strip():
         logging.warning("Generated chapter draft is empty.")
     chapter_file = os.path.join(chapters_dir, f"chapter_{novel_number}.txt")

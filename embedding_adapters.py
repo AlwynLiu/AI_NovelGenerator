@@ -8,15 +8,15 @@ from langchain_openai import AzureOpenAIEmbeddings, OpenAIEmbeddings
 
 def ensure_openai_base_url_has_v1(url: str) -> str:
     """
-    若用户输入的 url 不包含 '/v1'，则在末尾追加 '/v1'。
+    若用户输入的 url 不包含 '/v1' 或 '/v3'，则在末尾追加 '/v1'。
     """
     import re
     url = url.strip()
     if not url:
         return url
-    if not re.search(r'/v\d+$', url):
-        if '/v1' not in url:
-            url = url.rstrip('/') + '/v1'
+    # 检查是否已经包含 v1 或 v3
+    if not re.search(r'/v[13]$', url) and '/v1' not in url and '/v3' not in url:
+        url = url.rstrip('/') + '/v1'
     return url
 
 class BaseEmbeddingAdapter:
@@ -34,166 +34,121 @@ class OpenAIEmbeddingAdapter(BaseEmbeddingAdapter):
     基于 OpenAIEmbeddings（或兼容接口）的适配器
     """
     def __init__(self, api_key: str, base_url: str, model_name: str):
+        self._embedding = OpenAIEmbeddings(
+            openai_api_key=api_key,
+            openai_api_base=ensure_openai_base_url_has_v1(base_url),
+            model=model_name
+        )
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        return self._embedding.embed_documents(texts)
+
+    def embed_query(self, query: str) -> List[float]:
+        return self._embedding.embed_query(query)
+
+class VolcanoEngineEmbeddingAdapter(BaseEmbeddingAdapter):
+    """
+    基于火山引擎（OpenAI 兼容接口）的适配器
+    """
+    def __init__(self, api_key: str, base_url: str, model_name: str):
         self.api_key = api_key
         self.base_url = ensure_openai_base_url_has_v1(base_url)
         self.model_name = model_name
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        # 确保所有文本都是字符串类型
-        string_texts = [str(text) for text in texts]
-        url = self.base_url + "/embeddings"
+        url = f"{self.base_url}"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
         data = {
-            "model": self.model_name,
-            "input": string_texts
+            "encoding_format": "float",
+            "input": [
+                {
+                    "type": "text",
+                    "text": str(text)
+                } for text in texts
+            ],
+            "model": self.model_name
         }
         try:
             response = requests.post(url, headers=headers, json=data)
             response.raise_for_status()
             result = response.json()
-            if "data" not in result:
-                raise ValueError("No 'data' field in response")
-            return [item.get("embedding", []) for item in result["data"]]
-        except requests.exceptions.RequestException as e:
-            logging.error(f"OpenAI embeddings request error: {e}\n{traceback.format_exc()}")
-            return []
-
-    def embed_query(self, query: str) -> List[float]:
-        # 确保查询是字符串类型
-        string_query = str(query)
-        url = self.base_url + "/embeddings"
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
-        data = {
-            "model": self.model_name,
-            "input": string_query
-        }
-        try:
-            response = requests.post(url, headers=headers, json=data)
-            response.raise_for_status()
-            result = response.json()
-            if "data" not in result or not result["data"]:
-                raise ValueError("No 'data' field in response")
-            return result["data"][0].get("embedding", [])
-        except requests.exceptions.RequestException as e:
-            logging.error(f"OpenAI embeddings request error: {e}\n{traceback.format_exc()}")
-            return []
-
-class VolcanoEngineEmbeddingAdapter(BaseEmbeddingAdapter):
-    """
-    基于火山引擎官方 SDK 的适配器
-    """
-    def __init__(self, api_key: str, base_url: str, model_name: str):
-        from volcenginesdkarkruntime import Ark
-        self.ark = Ark(
-            api_key=api_key)
-        self.model_name = model_name
-
-    def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        # 确保所有文本都是字符串类型
-        string_texts = [str(text) for text in texts]
-        try:
-            # 构建批量输入格式
-            input_data = [{"type": "text", "text": text} for text in string_texts]
             
-            response = self.ark.multimodal_embeddings.create(
-                model=self.model_name,
-                input=input_data
-            )
-            
-            if response and response.data:
-                # 处理 response.data 可能是元组列表的情况
-                embeddings = []
-                embedding_count = 0
-                
-                for item in response.data:
-                    # 检查 item 是否是元组
-                    if isinstance(item, tuple):
-                        # 处理元组结构：('embedding', [嵌入向量])
-                        if len(item) == 2 and item[0] == 'embedding' and isinstance(item[1], list):
+            embeddings = []
+            if "data" in result:
+                if isinstance(result["data"], dict) and "embedding" in result["data"]:
+                    if len(texts) == 1:
+                        embeddings = [result["data"]["embedding"]]
+                    else:
+                        for text in texts:
+                            single_data = {
+                                "encoding_format": "float",
+                                "input": [{"type": "text", "text": str(text)}],
+                                "model": self.model_name
+                            }
+                            try:
+                                single_response = requests.post(url, headers=headers, json=single_data)
+                                single_response.raise_for_status()
+                                single_result = single_response.json()
+                                if "data" in single_result and "embedding" in single_result["data"]:
+                                    embeddings.append(single_result["data"]["embedding"])
+                                else:
+                                    embeddings.append([0.0] * 2048)
+                            except Exception as e:
+                                logging.error(f"Single embedding request error: {e}")
+                                embeddings.append([0.0] * 2048)
+                elif isinstance(result["data"], list):
+                    for item in result["data"]:
+                        if isinstance(item, dict) and "embedding" in item:
+                            embeddings.append(item["embedding"])
+                        elif isinstance(item, tuple) and len(item) == 2 and item[0] == "embedding":
                             embeddings.append(item[1])
-                            embedding_count += 1
-                            # 只处理与输入文本数量相同的嵌入向量
-                            if embedding_count == len(string_texts):
-                                break
                         else:
-                            # 忽略其他类型的元组
-                            pass
-                    elif hasattr(item, 'embedding'):
-                        # 正常情况：item 是具有 embedding 属性的对象
-                        embeddings.append(item.embedding)
-                        embedding_count += 1
-                        # 只处理与输入文本数量相同的嵌入向量
-                        if embedding_count == len(string_texts):
-                            break
-                    else:
-                        # 忽略其他类型的项目
-                        pass
-                
-                # 确保 embeddings 列表的长度与输入文本数量一致
-                while len(embeddings) < len(string_texts):
-                    embeddings.append([])
-                
-                return embeddings
+                            embeddings.append([0.0] * 2048)
+                    while len(embeddings) < len(texts):
+                        embeddings.append([0.0] * 2048)
+                    embeddings = embeddings[:len(texts)]
+                else:
+                    for _ in texts:
+                        embeddings.append([0.0] * 2048)
             else:
-                return [[]] * len(string_texts)
+                for _ in texts:
+                    embeddings.append([0.0] * 2048)
+            return embeddings
         except Exception as e:
             logging.error(f"Volcano Engine embeddings request error: {e}\n{traceback.format_exc()}")
-            return [[]] * len(string_texts)
+            return [[0.0] * 2048 for _ in texts]
 
     def embed_query(self, query: str) -> List[float]:
-        # 确保查询是字符串类型
-        string_query = str(query)
+        url = f"{self.base_url}"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "encoding_format": "float",
+            "input": [
+                {
+                    "type": "text",
+                    "text": str(query)
+                }
+            ],
+            "model": self.model_name
+        }
         try:
-            # 构建正确的输入格式
-            input_data = [{
-                "type": "text",
-                "text": string_query
-            }]
-            response = self.ark.multimodal_embeddings.create(
-                model=self.model_name,
-                input=input_data
-            )
-            if response and response.data:
-                # 检查 response.data 是否是列表或元组
-                if isinstance(response.data, (list, tuple)):
-                    # 遍历列表或元组中的元素
-                    for item in response.data:
-                        # 检查 item 是否是元组
-                        if isinstance(item, tuple):
-                            # 处理元组结构：('embedding', [嵌入向量])
-                            if len(item) == 2 and item[0] == 'embedding' and isinstance(item[1], list):
-                                return item[1]
-                        elif hasattr(item, 'embedding'):
-                            # 正常情况：item 是具有 embedding 属性的对象
-                            return item.embedding
-                    # 如果没有找到嵌入向量
-                    logging.warning(f"No embedding found in response.data: {response.data}")
-                    return []
-                elif isinstance(response.data, tuple):
-                    # 处理单个元组的情况
-                    if len(response.data) == 2 and response.data[0] == 'embedding' and isinstance(response.data[1], list):
-                        return response.data[1]
-                    else:
-                        logging.warning(f"Unexpected tuple structure: {response.data}")
-                        return []
-                elif hasattr(response.data, 'embedding'):
-                    # 正常情况：response.data 是具有 embedding 属性的对象
-                    return response.data.embedding
-                else:
-                    # 尝试其他可能的属性或方法
-                    logging.warning(f"Unexpected response.data type: {type(response.data)}")
-                    return []
+            response = requests.post(url, headers=headers, json=data)
+            response.raise_for_status()
+            result = response.json()
+            if "data" in result and "embedding" in result["data"]:
+                return result["data"]["embedding"]
             else:
-                return []
+                logging.warning(f"Unexpected response format: {result}")
+                return [0.0] * 2048
         except Exception as e:
             logging.error(f"Volcano Engine embeddings request error: {e}\n{traceback.format_exc()}")
-            return []
+            return [0.0] * 2048
 
 class AzureOpenAIEmbeddingAdapter(BaseEmbeddingAdapter):
     """
