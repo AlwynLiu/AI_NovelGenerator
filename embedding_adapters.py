@@ -51,6 +51,7 @@ class VolcanoEngineEmbeddingAdapter(BaseEmbeddingAdapter):
     基于火山引擎（OpenAI 兼容接口）的适配器
     """
     def __init__(self, api_key: str, base_url: str, model_name: str):
+
         self.api_key = api_key
         self.base_url = ensure_openai_base_url_has_v1(base_url)
         self.model_name = model_name
@@ -61,65 +62,33 @@ class VolcanoEngineEmbeddingAdapter(BaseEmbeddingAdapter):
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
-        data = {
-            "encoding_format": "float",
-            "input": [
-                {
-                    "type": "text",
-                    "text": str(text)
-                } for text in texts
-            ],
-            "model": self.model_name
-        }
-        try:
-            response = requests.post(url, headers=headers, json=data)
-            response.raise_for_status()
-            result = response.json()
-            
-            embeddings = []
-            if "data" in result:
-                if isinstance(result["data"], dict) and "embedding" in result["data"]:
-                    if len(texts) == 1:
-                        embeddings = [result["data"]["embedding"]]
-                    else:
-                        for text in texts:
-                            single_data = {
-                                "encoding_format": "float",
-                                "input": [{"type": "text", "text": str(text)}],
-                                "model": self.model_name
-                            }
-                            try:
-                                single_response = requests.post(url, headers=headers, json=single_data)
-                                single_response.raise_for_status()
-                                single_result = single_response.json()
-                                if "data" in single_result and "embedding" in single_result["data"]:
-                                    embeddings.append(single_result["data"]["embedding"])
-                                else:
-                                    embeddings.append([0.0] * 2048)
-                            except Exception as e:
-                                logging.error(f"Single embedding request error: {e}")
-                                embeddings.append([0.0] * 2048)
-                elif isinstance(result["data"], list):
-                    for item in result["data"]:
-                        if isinstance(item, dict) and "embedding" in item:
-                            embeddings.append(item["embedding"])
-                        elif isinstance(item, tuple) and len(item) == 2 and item[0] == "embedding":
-                            embeddings.append(item[1])
-                        else:
-                            embeddings.append([0.0] * 2048)
-                    while len(embeddings) < len(texts):
-                        embeddings.append([0.0] * 2048)
-                    embeddings = embeddings[:len(texts)]
-                else:
-                    for _ in texts:
-                        embeddings.append([0.0] * 2048)
-            else:
-                for _ in texts:
-                    embeddings.append([0.0] * 2048)
-            return embeddings
-        except Exception as e:
-            logging.error(f"Volcano Engine embeddings request error: {e}\n{traceback.format_exc()}")
-            return [[0.0] * 2048 for _ in texts]
+        embeddings = []
+        for text in texts:
+            data = {
+                "encoding_format": "float",
+                "input": [
+                    {
+                        "type": "text",
+                        "text": str(text)
+                    }
+                ],
+                "dimensions": 1024,
+                "model": self.model_name
+            }
+            try:
+                response = requests.post(url, headers=headers, json=data)
+                response.raise_for_status()
+                result = response.json()
+                if "data" not in result or not result["data"]:
+                    logging.error(f"Invalid response format from Volcano Engine API: {result}")
+                    embeddings.append([])
+                    continue
+                embedding = result["data"].get("embedding", [])
+                embeddings.append(embedding)
+            except Exception as e:
+                logging.error(f"Volcano Engine embeddings request error: {e}\n{traceback.format_exc()}")
+                embeddings.append([])
+        return embeddings
 
     def embed_query(self, query: str) -> List[float]:
         url = f"{self.base_url}"
@@ -135,20 +104,23 @@ class VolcanoEngineEmbeddingAdapter(BaseEmbeddingAdapter):
                     "text": str(query)
                 }
             ],
+            "dimensions": 1024,
             "model": self.model_name
         }
         try:
             response = requests.post(url, headers=headers, json=data)
             response.raise_for_status()
             result = response.json()
-            if "data" in result and "embedding" in result["data"]:
-                return result["data"]["embedding"]
-            else:
-                logging.warning(f"Unexpected response format: {result}")
-                return [0.0] * 2048
+
+            embeddings = []
+            if "data" not in result or not result["data"]:
+                logging.error(f"Invalid response format from LM Studio API: {result}")
+                return []
+            embeddings.append(result["data"].get("embedding", {}))
+            return embeddings
         except Exception as e:
             logging.error(f"Volcano Engine embeddings request error: {e}\n{traceback.format_exc()}")
-            return [0.0] * 2048
+            return []
 
 class AzureOpenAIEmbeddingAdapter(BaseEmbeddingAdapter):
     """

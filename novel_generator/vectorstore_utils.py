@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 向量库相关操作（初始化、更新、检索、清空、文本切分等）
+适配 chromadb 0.5.22 版本
 """
 import os
 import logging
@@ -16,10 +17,11 @@ from langchain_chroma import Chroma
 
 # 禁用特定的Torch警告
 warnings.filterwarnings('ignore', message='.*Torch was not compiled with flash attention.*')
+os.environ['ANONYMIZED_TELEMETRY'] = 'False'
 os.environ["TOKENIZERS_PARALLELISM"] = "false"  # 禁用tokenizer并行警告
 
 from chromadb.config import Settings
-from langchain.docstore.document import Document
+from langchain_core.documents import Document
 from sklearn.metrics.pairwise import cosine_similarity
 from .common import call_with_retry
 
@@ -47,7 +49,12 @@ def init_vector_store(embedding_adapter, texts, filepath: str):
     """
     在 filepath 下创建/加载一个 Chroma 向量库并插入 texts。
     如果Embedding失败，则返回 None，不中断任务。
+    适配 chromadb 0.5.22 版本（使用 metadata 配置 HNSW）
     """
+    import chromadb
+    from chromadb.config import Settings as ChromaSettings
+    from langchain_chroma import Chroma
+    from langchain_core.documents import Document
     from langchain.embeddings.base import Embeddings as LCEmbeddings
 
     store_dir = get_vectorstore_dir(filepath)
@@ -73,14 +80,48 @@ def init_vector_store(embedding_adapter, texts, filepath: str):
                 return res
 
         chroma_embedding = LCEmbeddingWrapper()
-        vectorstore = Chroma.from_documents(
-            documents,
-            embedding=chroma_embedding,
-            persist_directory=store_dir,
-            client_settings=Settings(anonymized_telemetry=False),
-            collection_name="novel_collection"
+
+        # 1. 创建原生 ChromaDB 持久化客户端
+        chroma_client = chromadb.PersistentClient(
+            path=store_dir,
+            settings=ChromaSettings(anonymized_telemetry=False)
         )
+
+        # 2. 删除已有集合（如果有），确保新 HNSW 配置生效（可选）
+        try:
+            chroma_client.delete_collection("novel_collection")
+            logging.info("已删除旧的 collection，将使用新的 HNSW 配置重建。")
+        except ValueError:
+            pass  # 集合不存在，忽略
+
+        # 3. 使用原生客户端创建集合并配置 HNSW 参数（旧版 metadata 方式）
+        #    注意：在 chromadb 0.5.x 中，参数名使用 hnsw:M / hnsw:construction_ef / hnsw:space
+        collection = chroma_client.create_collection(
+            name="novel_collection",
+            metadata={
+                "hnsw:M": 12,                 # M值，控制内存占用
+                "hnsw:construction_ef": 50,   # 构建候选池大小
+                "hnsw:space": "cosine"        # 距离度量
+            }
+        )
+
+        # 4. 将 LangChain 的 Chroma 包装器挂载到该客户端
+        vectorstore = Chroma(
+            client=chroma_client,
+            collection_name="novel_collection",
+            embedding_function=chroma_embedding,
+        )
+
+        # 5. 分批添加文档（每批 50 条，降低内存峰值）
+        batch_size = 50
+        total = len(documents)
+        for i in range(0, total, batch_size):
+            batch = documents[i:i+batch_size]
+            vectorstore.add_documents(batch)
+            logging.info(f"已添加批次 {i//batch_size + 1}/{(total + batch_size - 1)//batch_size}")
+
         return vectorstore
+
     except Exception as e:
         logging.warning(f"Init vector store failed: {e}")
         traceback.print_exc()
@@ -88,14 +129,18 @@ def init_vector_store(embedding_adapter, texts, filepath: str):
 
 def load_vector_store(embedding_adapter, filepath: str):
     """
-    读取已存在的 Chroma 向量库。若不存在则返回 None。
-    如果加载失败（embedding 或IO问题），则返回 None。
+    读取已存在的 Chroma 向量库。若不存在则自动创建一个空库。
+    如果加载/创建失败，则返回 None。
+    适配 chromadb 0.5.22 版本
     """
+    import chromadb
+    from chromadb.config import Settings as ChromaSettings
+    from chromadb.errors import InvalidCollectionException  # 关键导入
+    from langchain_chroma import Chroma
     from langchain.embeddings.base import Embeddings as LCEmbeddings
+
     store_dir = get_vectorstore_dir(filepath)
-    if not os.path.exists(store_dir):
-        logging.info("Vector store not found. Will return None.")
-        return None
+    os.makedirs(store_dir, exist_ok=True)
 
     try:
         class LCEmbeddingWrapper(LCEmbeddings):
@@ -116,16 +161,40 @@ def load_vector_store(embedding_adapter, filepath: str):
                 return res
 
         chroma_embedding = LCEmbeddingWrapper()
-        return Chroma(
-            persist_directory=store_dir,
-            embedding_function=chroma_embedding,
-            client_settings=Settings(anonymized_telemetry=False),
-            collection_name="novel_collection"
+
+        chroma_client = chromadb.PersistentClient(
+            path=store_dir,
+            settings=ChromaSettings(anonymized_telemetry=False)
         )
+
+        # 检查集合是否存在，若不存在则创建
+        try:
+            chroma_client.get_collection("novel_collection")
+            logging.info("Collection 'novel_collection' already exists, loading existing.")
+        except (ValueError, InvalidCollectionException):  # 捕获两种异常
+            logging.info("Collection 'novel_collection' does not exist, creating a new one.")
+            chroma_client.create_collection(
+                name="novel_collection",
+                metadata={
+                    "hnsw:M": 12,
+                    "hnsw:construction_ef": 50,
+                    "hnsw:space": "cosine"
+                }
+            )
+            logging.info("New collection created with HNSW config (M=12, construction_ef=50).")
+
+        vectorstore = Chroma(
+            client=chroma_client,
+            collection_name="novel_collection",
+            embedding_function=chroma_embedding,
+        )
+        return vectorstore
+
     except Exception as e:
-        logging.warning(f"Failed to load vector store: {e}")
+        logging.warning(f"Failed to load or create vector store: {e}")
         traceback.print_exc()
         return None
+        
 
 def split_by_length(text: str, max_length: int = 500):
     """按照 max_length 切分文本"""
@@ -176,7 +245,8 @@ def update_vector_store(embedding_adapter, new_chapter: str, filepath: str):
     将最新章节文本插入到向量库中。
     若库不存在则初始化；若初始化/更新失败，则跳过。
     """
-    from utils import read_file, clear_file_content, save_string_to_txt
+    from langchain_core.documents import Document
+
     splitted_texts = split_text_for_vectorstore(new_chapter)
     if not splitted_texts:
         logging.warning("No valid text to insert into vector store. Skipping.")
@@ -192,9 +262,15 @@ def update_vector_store(embedding_adapter, new_chapter: str, filepath: str):
             logging.info("New vector store created successfully.")
         return
 
+    # 追加模式：分批添加文档
+    docs = [Document(page_content=str(t)) for t in splitted_texts]
+    batch_size = 50
+    total = len(docs)
     try:
-        docs = [Document(page_content=str(t)) for t in splitted_texts]
-        store.add_documents(docs)
+        for i in range(0, total, batch_size):
+            batch = docs[i:i+batch_size]
+            store.add_documents(batch)
+            logging.info(f"已添加批次 {i//batch_size + 1}/{(total + batch_size - 1)//batch_size}")
         logging.info("Vector store updated with the new chapter splitted segments.")
     except Exception as e:
         logging.warning(f"Failed to update vector store: {e}")
@@ -235,7 +311,7 @@ def _get_sentence_transformer(model_name: str = 'paraphrase-MiniLM-L6-v2'):
         # 禁用SSL验证
         ssl._create_default_https_context = ssl._create_unverified_context
         
-        # ...existing code...
+        # ... existing code ...
     except Exception as e:
         logging.error(f"Failed to load sentence transformer model: {e}")
         traceback.print_exc()

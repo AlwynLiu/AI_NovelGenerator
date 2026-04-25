@@ -11,7 +11,7 @@ import jieba
 import warnings
 from utils import read_file
 from novel_generator.vectorstore_utils import load_vector_store, init_vector_store
-from langchain.docstore.document import Document
+from langchain_core.documents import Document
 
 # 禁用特定的Torch警告
 warnings.filterwarnings('ignore', message='.*Torch was not compiled with flash attention.*')
@@ -79,8 +79,19 @@ def import_knowledge_file(
             logging.warning("知识库导入失败，跳过。")
     else:
         try:
-            docs = [Document(page_content=str(p)) for p in paragraphs]
-            store.add_documents(docs)
+            # long_text = str(paragraphs[0])  # 6000+ 字符
+            # for length in [50, 100, 200, 300, 400, 500]:
+            #     print('length ------------', length)
+            #     test_doc = Document(page_content=long_text[:length])
+            #     try:
+            #         store.add_documents([test_doc])
+            #         print(f"长度 {length} 成功")
+            #     except Exception as e:
+            #         print(f"长度 {length} 崩溃: {e}")
+            #         break
+            for p in paragraphs:
+                doc = Document(page_content=str(p))
+                store.add_documents([doc])
             logging.info("知识库文件已成功导入至向量库(追加模式)。")
         except Exception as e:
             logging.warning(f"知识库导入失败: {e}")
