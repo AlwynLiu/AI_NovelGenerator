@@ -112,12 +112,10 @@ class VolcanoEngineEmbeddingAdapter(BaseEmbeddingAdapter):
             response.raise_for_status()
             result = response.json()
 
-            embeddings = []
             if "data" not in result or not result["data"]:
                 logging.error(f"Invalid response format from LM Studio API: {result}")
                 return []
-            embeddings.append(result["data"].get("embedding", {}))
-            return embeddings
+            return result["data"].get("embedding", [])
         except Exception as e:
             logging.error(f"Volcano Engine embeddings request error: {e}\n{traceback.format_exc()}")
             return []
