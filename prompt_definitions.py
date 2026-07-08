@@ -290,7 +290,7 @@ chapter_blueprint_prompt = """\
 悬念密度：[紧凑/渐进/爆发/...]
 伏笔操作：埋设(A线索)→强化(B矛盾)...
 认知颠覆：★☆☆☆☆
-本章简述：[剧情点细纲]
+本章简述：[一句话概括]
 
 第n+1章 - [标题]
 本章定位：[角色/事件/主题/...]
@@ -298,10 +298,10 @@ chapter_blueprint_prompt = """\
 悬念密度：[紧凑/渐进/爆发/...]
 伏笔操作：埋设(A线索)→强化(B矛盾)...
 认知颠覆：★☆☆☆☆
-本章简述：[剧情点细纲]
+本章简述：[一句话概括]
 
 要求：
-- 使用精炼语言描述，每章字数控制在300字以内。
+- 使用精炼语言描述，每章字数控制在100字以内。
 - 合理安排节奏，确保整体悬念曲线的连贯性。
 - 在生成{number_of_chapters}章前不要出现结局章节。
 
@@ -339,7 +339,7 @@ chunked_chapter_blueprint_prompt = """\
 悬念密度：[紧凑/渐进/爆发/...]
 伏笔操作：埋设(A线索)→强化(B矛盾)...
 认知颠覆：★☆☆☆☆
-本章简述：[剧情点细纲]
+本章简述：[一句话概括]
 
 第n+1章 - [标题]
 本章定位：[角色/事件/主题/...]
@@ -347,10 +347,10 @@ chunked_chapter_blueprint_prompt = """\
 悬念密度：[紧凑/渐进/爆发/...]
 伏笔操作：埋设(A线索)→强化(B矛盾)...
 认知颠覆：★☆☆☆☆
-本章简述：[剧情点细纲]
+本章简述：[一句话概括]
 
 要求：
-- 使用精炼语言描述，每章字数控制在300字以内。
+- 使用精炼语言描述，每章字数控制在100字以内。
 - 合理安排节奏，确保整体悬念曲线的连贯性。
 - 在生成{number_of_chapters}章前不要出现结局章节。
 
@@ -539,23 +539,15 @@ first_chapter_draft_prompt = """\
 
 # 8.2 后续章节草稿提示
 next_chapter_draft_prompt = """\
-参考文档：
-└── 前文摘要：
-    {global_summary}
+你是一个资深的网文作者，严禁生成的内容有ai味：
+   规则1：禁止把环境写成说明书。
+   规则2：对话必须推进至少一个角色的内心状态，不能只交换信息。
+   规则3：段落分段在手机上阅读不超过三行。
 
-└── 前章结尾段：
-    {previous_chapter_excerpt}
-
-└── 用户指导：
+## 用户指导：
     {user_guidance}
 
-└── 角色状态：
-    {character_state}
-
-└── 当前章节摘要：
-    {short_summary}
-
-当前章节信息：
+## 当前章节信息：
 第{novel_number}章《{chapter_title}》：
 ├── 章节定位：{chapter_role}
 ├── 核心作用：{chapter_purpose}
@@ -569,7 +561,7 @@ next_chapter_draft_prompt = """\
 ├── 场景地点：{scene_location}
 └── 时间压力：{time_constraint}
 
-下一章节目录
+## 下一章节目录
 第{next_chapter_number}章《{next_chapter_title}》：
 ├── 章节定位：{next_chapter_role}
 ├── 核心作用：{next_chapter_purpose}
@@ -578,7 +570,7 @@ next_chapter_draft_prompt = """\
 ├── 转折程度：{next_chapter_plot_twist_level}
 └── 章节简述：{next_chapter_summary}
 
-知识库参考：（按优先级应用）
+## 知识库参考：（按优先级应用）
 {filtered_context}
 
 🎯 知识库应用规则：
@@ -609,7 +601,22 @@ next_chapter_draft_prompt = """\
      - 相似度20-40%：替换至少3个关键要素
      - 相似度<20%：允许保留核心概念但改变表现形式
 
-依据前面所有设定，开始完成第 {novel_number} 章的正文，字数要求{word_number}字，
+     
+## 参考文档：
+└── 前文摘要：
+    {global_summary}
+
+└── 前章结尾段：
+    {previous_chapter_excerpt}
+
+└── 角色状态：
+    {character_state}
+
+└── 当前章节摘要：
+    {short_summary}
+
+## 依据前面所有设定
+开始完成第 {novel_number} 章的正文，字数要求{word_number}字，
 内容生成严格遵循：
 -用户指导
 -当前章节摘要
@@ -757,4 +764,65 @@ Character_Import_Prompt = """\
 <<待分析小说文本开始>>
 {content}
 <<待分析小说文本结束>>
+"""
+
+# =============== 上下文过滤提示词 ===============
+# 前文摘要过滤：根据当前章节信息，删除无关内容
+global_summary_filter_prompt = """\
+你是一位专业的小说编辑助手。当前正在创作第 {novel_number} 章《{chapter_title}》。
+
+你的任务是对「前文摘要」进行精简过滤，删除与本章创作无关的细节，只保留与本章直接相关的内容。
+
+当前章节信息：
+- 章节定位：{chapter_role}
+- 核心作用：{chapter_purpose}
+- 核心人物：{characters_involved}
+- 关键道具：{key_items}
+- 场景地点：{scene_location}
+- 时间压力：{time_constraint}
+- 用户指导：{user_guidance}
+
+过滤规则：
+1. 保留与 {characters_involved} 中核心人物直接相关的情节线和伏笔
+2. 保留与 {key_items} 相关的道具线索
+3. 保留与 {scene_location} 相关的场景背景
+4. 保留与本章定位（{chapter_role}）和核心作用（{chapter_purpose}）直接相关的冲突和事件
+5. 删除本章不会涉及的支线情节、已完全解决的冲突、已失效的背景设定
+6. 删除过于久远且与当前剧情无关联的历史事件
+7. 对仅间接相关的内容，用一句话概括即可
+
+前文摘要原文：
+{global_summary}
+
+请输出过滤后的前文摘要，保持语言流畅连贯，只保留对本章创作真正有用的信息。
+"""
+
+# 角色状态过滤：根据当前章节信息，删除无关角色和状态
+character_state_filter_prompt = """\
+你是一位专业的小说编辑助手。当前正在创作第 {novel_number} 章《{chapter_title}》。
+
+你的任务是对「角色状态」进行精简过滤，删除与本章创作无关的角色和状态信息，只保留本章出场角色的核心信息。
+
+当前章节信息：
+- 章节定位：{chapter_role}
+- 核心作用：{chapter_purpose}
+- 核心人物：{characters_involved}
+- 关键道具：{key_items}
+- 场景地点：{scene_location}
+- 时间压力：{time_constraint}
+- 用户指导：{user_guidance}
+
+过滤规则：
+1. 保留核心人物（{characters_involved}）的完整状态（物品、能力、状态、关系网、触发事件）
+2. 保留与 {key_items} 和 {scene_location} 直接相关的物品和场景状态
+3. 保留与本章定位（{chapter_role}）和核心作用（{chapter_purpose}）密切相关的角色关系和冲突
+4. 删除本章不会出场的角色及其全部信息
+5. 删除已消耗、已失效、与当前剧情无关的物品和事件
+6. 对非核心但可能涉及的角色，只保留一行简要状态
+7. 保留所有未解决的冲突和未回收的伏笔
+
+角色状态原文：
+{character_state}
+
+请输出过滤后的角色状态信息，保持原有的树形结构格式（├── 或 └──），只保留对本章创作真正有用的信息。
 """

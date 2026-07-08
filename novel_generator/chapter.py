@@ -481,7 +481,69 @@ def build_chapter_prompt(
         logging.error(f"知识处理流程异常：{str(e)}")
         filtered_context = "（知识库处理失败）"
 
-    # 返回最终提示词
+    # ========== 过滤 global_summary 和 character_state ==========
+    # 创建独立的 LLM adapter 用于上下文过滤
+    filter_llm = create_llm_adapter(
+        interface_format=interface_format,
+        base_url=base_url,
+        model_name=model_name,
+        api_key=api_key,
+        temperature=0.3,
+        max_tokens=max_tokens,
+        timeout=timeout
+    )
+
+    # 过滤前文摘要
+    try:
+        from prompt_definitions import global_summary_filter_prompt
+        summary_filter = global_summary_filter_prompt.format(
+            novel_number=novel_number,
+            chapter_title=chapter_title,
+            chapter_role=chapter_role,
+            chapter_purpose=chapter_purpose,
+            characters_involved=characters_involved,
+            key_items=key_items,
+            scene_location=scene_location,
+            time_constraint=time_constraint,
+            user_guidance=user_guidance if user_guidance else "无特殊指导",
+            global_summary=global_summary_text
+        )
+        filtered_summary = invoke_with_cleaning(filter_llm, summary_filter)
+        if filtered_summary:
+            global_summary_text = filtered_summary
+            # 保存带章节号的过滤后摘要
+            summary_file = os.path.join(filepath, f"global_summary_{novel_number}.txt")
+            save_string_to_txt(filtered_summary, summary_file)
+            logging.info(f"Global summary filtered and saved to global_summary_{novel_number}.txt")
+    except Exception as e:
+        logging.error(f"Error filtering global summary: {str(e)}")
+
+    # 过滤角色状态
+    try:
+        from prompt_definitions import character_state_filter_prompt
+        state_filter = character_state_filter_prompt.format(
+            novel_number=novel_number,
+            chapter_title=chapter_title,
+            chapter_role=chapter_role,
+            chapter_purpose=chapter_purpose,
+            characters_involved=characters_involved,
+            key_items=key_items,
+            scene_location=scene_location,
+            time_constraint=time_constraint,
+            user_guidance=user_guidance if user_guidance else "无特殊指导",
+            character_state=character_state_text
+        )
+        filtered_state = invoke_with_cleaning(filter_llm, state_filter)
+        if filtered_state:
+            character_state_text = filtered_state
+            # 保存带章节号的过滤后角色状态
+            state_file = os.path.join(filepath, f"character_state_{novel_number}.txt")
+            save_string_to_txt(filtered_state, state_file)
+            logging.info(f"Character state filtered and saved to character_state_{novel_number}.txt")
+    except Exception as e:
+        logging.error(f"Error filtering character state: {str(e)}")
+
+    # 返回最终提示词（使用过滤后的 global_summary 和 character_state）
     return next_chapter_draft_prompt.format(
         user_guidance=user_guidance if user_guidance else "无特殊指导",
         global_summary=global_summary_text,
