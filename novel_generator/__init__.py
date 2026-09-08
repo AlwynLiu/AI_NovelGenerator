@@ -6,7 +6,8 @@ from .chapter import (
     summarize_recent_chapters,
     get_filtered_knowledge_context,
     build_chapter_prompt,
-    generate_chapter_draft
+    generate_chapter_draft,
+    generate_chapter_outline
 )
 from .finalization import finalize_chapter, enrich_chapter_text
 from .knowledge import import_knowledge_file

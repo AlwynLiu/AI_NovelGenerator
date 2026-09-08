@@ -112,6 +112,79 @@ def generate_chapter_blueprint_ui(self):
             self.enable_button_safe(self.btn_generate_directory)
     threading.Thread(target=task, daemon=True).start()
 
+def generate_chapter_outline_ui(self):
+    """Step3: 生成当前章节的创作细纲（独立步骤，生成后用户可查看/编辑）"""
+    filepath = self.filepath_var.get().strip()
+    if not filepath:
+        messagebox.showwarning("警告", "请先配置保存文件路径。")
+        return
+
+    def task():
+        self.disable_button_safe(self.btn_generate_outline)
+        try:
+            interface_format = self.interface_format_var.get().strip()
+            api_key = self.api_key_var.get().strip()
+            base_url = self.base_url_var.get().strip()
+            model_name = self.model_name_var.get().strip()
+            temperature = self.temperature_var.get()
+            max_tokens = self.max_tokens_var.get()
+            timeout_val = self.safe_get_int(self.timeout_var, 600)
+
+            embedding_api_key = self.embedding_api_key_var.get().strip()
+            embedding_url = self.embedding_url_var.get().strip()
+            embedding_interface_format = self.embedding_interface_format_var.get().strip()
+            embedding_model_name = self.embedding_model_name_var.get().strip()
+
+            chap_num = self.safe_get_int(self.chapter_num_var, 1)
+            word_number = self.safe_get_int(self.word_number_var, 3000)
+            embedding_k = self.safe_get_int(self.embedding_retrieval_k_var, 2)
+            user_guidance = self.user_guide_text.get("0.0", "end").strip()
+            char_inv = self.characters_involved_var.get().strip()
+            key_items = self.key_items_var.get().strip()
+            scene_loc = self.scene_location_var.get().strip()
+            time_constr = self.time_constraint_var.get().strip()
+
+            self.safe_log(f"开始生成第{chap_num}章创作细纲...")
+
+            from novel_generator.chapter import generate_chapter_outline
+            outline_text = generate_chapter_outline(
+                api_key=api_key,
+                base_url=base_url,
+                model_name=model_name,
+                interface_format=interface_format,
+                filepath=filepath,
+                novel_number=chap_num,
+                word_number=word_number,
+                temperature=temperature,
+                user_guidance=user_guidance,
+                characters_involved=char_inv,
+                key_items=key_items,
+                scene_location=scene_loc,
+                time_constraint=time_constr,
+                embedding_api_key=embedding_api_key,
+                embedding_url=embedding_url,
+                embedding_interface_format=embedding_interface_format,
+                embedding_model_name=embedding_model_name,
+                embedding_retrieval_k=embedding_k,
+                max_tokens=max_tokens,
+                timeout=timeout_val,
+                outline_temperature=0.3
+            )
+
+            if outline_text and "失败" not in outline_text:
+                self.safe_log(f"✅ 第{chap_num}章细纲生成完成。保存至 outlines/outline_{chap_num}.txt")
+                # 在文本框中展示细纲，方便用户查看/编辑
+                self.master.after(0, lambda: self.show_chapter_in_textbox(
+                    f"=== 第{chap_num}章 创作细纲 ===\n\n{outline_text}"
+                ))
+            else:
+                self.safe_log("⚠️ 细纲生成失败或无内容。")
+        except Exception:
+            self.handle_exception("生成章节细纲时出错")
+        finally:
+            self.enable_button_safe(self.btn_generate_outline)
+    threading.Thread(target=task, daemon=True).start()
+
 def generate_chapter_draft_ui(self):
     filepath = self.filepath_var.get().strip()
     if not filepath:

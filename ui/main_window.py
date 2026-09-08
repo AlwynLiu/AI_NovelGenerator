@@ -21,6 +21,7 @@ from ui.novel_params_tab import build_novel_params_area, build_optional_buttons_
 from ui.generation_handlers import (
     generate_novel_architecture_ui,
     generate_chapter_blueprint_ui,
+    generate_chapter_outline_ui,
     generate_chapter_draft_ui,
     finalize_chapter_ui,
     do_consistency_check,
@@ -341,6 +342,7 @@ class NovelGeneratorGUI:
     # ----------------- 将导入的各模块函数直接赋给类方法 -----------------
     generate_novel_architecture_ui = generate_novel_architecture_ui
     generate_chapter_blueprint_ui = generate_chapter_blueprint_ui
+    generate_chapter_outline_ui = generate_chapter_outline_ui
     generate_chapter_draft_ui = generate_chapter_draft_ui
     finalize_chapter_ui = finalize_chapter_ui
     do_consistency_check = do_consistency_check

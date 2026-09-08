@@ -271,6 +271,243 @@ def get_filtered_knowledge_context(
         logging.error(f"Error in knowledge filtering: {str(e)}")
         return "（内容过滤过程出错）"
 
+def _read_outline_from_file(filepath: str, novel_number: int) -> str:
+    """从 outlines/ 目录读取细纲，不存在则返回占位提示"""
+    outline_file = os.path.join(filepath, "outlines", f"outline_{novel_number}.txt")
+    if os.path.exists(outline_file):
+        content = read_file(outline_file)
+        if content.strip():
+            logging.info(f"Loaded outline from outlines/outline_{novel_number}.txt")
+            return content
+    logging.warning(f"Outline file not found: outlines/outline_{novel_number}.txt, using fallback")
+    return "（尚未生成细纲，请先在UI中点击[生成细纲]按钮。如已生成，请检查 outlines/ 目录。）"
+
+def generate_chapter_outline(
+    api_key: str,
+    base_url: str,
+    model_name: str,
+    interface_format: str,
+    filepath: str,
+    novel_number: int,
+    word_number: int,
+    temperature: float,
+    user_guidance: str,
+    characters_involved: str,
+    key_items: str,
+    scene_location: str,
+    time_constraint: str,
+    embedding_api_key: str,
+    embedding_url: str,
+    embedding_interface_format: str,
+    embedding_model_name: str,
+    embedding_retrieval_k: int = 2,
+    max_tokens: int = 2048,
+    timeout: int = 600,
+    outline_temperature: float = 0.3
+) -> str:
+    """
+    完整的细纲生成流程：采集上下文 → 过滤 → 知识检索 → 生成细纲 → 保存到 outlines/
+
+    注意：第一章需要额外传入 novel_architecture_text 通过后续扩展
+    """
+    # ===== 阶段1：读取基础文件 =====
+    global_summary_file = os.path.join(filepath, "global_summary.txt")
+    global_summary_text = read_file(global_summary_file)
+    character_state_file = os.path.join(filepath, "character_state.txt")
+    character_state_text = read_file(character_state_file)
+    directory_file = os.path.join(filepath, "Novel_directory.txt")
+    blueprint_text = read_file(directory_file)
+
+    # 获取章节信息
+    chapter_info = get_chapter_info_from_blueprint(blueprint_text, novel_number)
+    chapter_title = chapter_info["chapter_title"]
+    chapter_role = chapter_info["chapter_role"]
+    chapter_purpose = chapter_info["chapter_purpose"]
+    suspense_level = chapter_info["suspense_level"]
+    foreshadowing = chapter_info["foreshadowing"]
+    plot_twist_level = chapter_info["plot_twist_level"]
+    chapter_summary = chapter_info["chapter_summary"]
+
+    # 获取下一章节信息
+    next_chapter_info = get_chapter_info_from_blueprint(blueprint_text, novel_number + 1)
+    next_chapter_role = next_chapter_info.get("chapter_role", "过渡章节")
+    next_chapter_purpose = next_chapter_info.get("chapter_purpose", "承上启下")
+    next_chapter_summary = next_chapter_info.get("chapter_summary", "衔接过渡内容")
+
+    chapters_dir = os.path.join(filepath, "chapters")
+    os.makedirs(chapters_dir, exist_ok=True)
+
+    # ===== 阶段2：获取前文上下文 =====
+    recent_texts = get_last_n_chapters_text(chapters_dir, novel_number, n=3)
+
+    # 生成当前章节摘要
+    try:
+        short_summary = summarize_recent_chapters(
+            interface_format=interface_format,
+            api_key=api_key,
+            base_url=base_url,
+            model_name=model_name,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            chapters_text_list=recent_texts,
+            novel_number=novel_number,
+            chapter_info=chapter_info,
+            next_chapter_info=next_chapter_info,
+            timeout=timeout
+        )
+    except Exception as e:
+        logging.error(f"Outline: summarize failed: {e}")
+        short_summary = "（摘要生成失败）"
+
+    # 获取前一章结尾
+    previous_excerpt = ""
+    for text in reversed(recent_texts):
+        if text.strip():
+            previous_excerpt = text[-800:] if len(text) > 800 else text
+            break
+
+    # ===== 阶段3：过滤上下文 =====
+    ctx_llm = create_llm_adapter(
+        interface_format=interface_format,
+        base_url=base_url,
+        model_name=model_name,
+        api_key=api_key,
+        temperature=0.3,
+        max_tokens=max_tokens,
+        timeout=timeout
+    )
+
+    safe_guidance = user_guidance if user_guidance else "无特殊指导"
+
+    # 过滤 global_summary
+    try:
+        from prompt_definitions import global_summary_filter_prompt
+        filter_prompt = global_summary_filter_prompt.format(
+            novel_number=novel_number, chapter_title=chapter_title,
+            chapter_role=chapter_role, chapter_purpose=chapter_purpose,
+            characters_involved=characters_involved, key_items=key_items,
+            scene_location=scene_location, time_constraint=time_constraint,
+            user_guidance=safe_guidance, global_summary=global_summary_text
+        )
+        result = invoke_with_cleaning(ctx_llm, filter_prompt)
+        if result:
+            global_summary_text = result
+    except Exception as e:
+        logging.error(f"Outline: filter global_summary failed: {e}")
+
+    # 过滤 character_state
+    try:
+        from prompt_definitions import character_state_filter_prompt
+        filter_prompt = character_state_filter_prompt.format(
+            novel_number=novel_number, chapter_title=chapter_title,
+            chapter_role=chapter_role, chapter_purpose=chapter_purpose,
+            characters_involved=characters_involved, key_items=key_items,
+            scene_location=scene_location, time_constraint=time_constraint,
+            user_guidance=safe_guidance, character_state=character_state_text
+        )
+        result = invoke_with_cleaning(ctx_llm, filter_prompt)
+        if result:
+            character_state_text = result
+    except Exception as e:
+        logging.error(f"Outline: filter character_state failed: {e}")
+
+    # ===== 阶段4：知识库检索 =====
+    filtered_context = "（知识库未启用）"
+    try:
+        from prompt_definitions import knowledge_search_prompt, knowledge_filter_prompt
+        from embedding_adapters import create_embedding_adapter
+
+        search_prompt = knowledge_search_prompt.format(
+            chapter_number=novel_number, chapter_title=chapter_title,
+            characters_involved=characters_involved, key_items=key_items,
+            scene_location=scene_location, chapter_role=chapter_role,
+            chapter_purpose=chapter_purpose, foreshadowing=foreshadowing,
+            short_summary=short_summary, user_guidance=user_guidance,
+            time_constraint=time_constraint
+        )
+        search_response = invoke_with_cleaning(ctx_llm, search_prompt)
+        keyword_groups = parse_search_keywords(search_response)
+
+        embedding_adapter = create_embedding_adapter(
+            embedding_interface_format, embedding_api_key,
+            embedding_url, embedding_model_name
+        )
+        store = load_vector_store(embedding_adapter, filepath)
+        all_contexts = []
+        if store:
+            collection_size = store._collection.count()
+            actual_k = min(embedding_retrieval_k, max(1, collection_size))
+            for group in keyword_groups:
+                context = get_relevant_context_from_vector_store(
+                    embedding_adapter=embedding_adapter, query=group,
+                    filepath=filepath, k=actual_k
+                )
+                if context:
+                    tag = "[TECHNIQUE]" if any(kw in group.lower() for kw in ["技法","手法","模板"]) else \
+                          "[SETTING]" if any(kw in group.lower() for kw in ["设定","技术","世界观"]) else "[GENERAL]"
+                    all_contexts.append(f"{tag} {context}")
+
+        processed = apply_content_rules(all_contexts, novel_number)
+        chapter_info_for_filter = {
+            "chapter_number": novel_number, "chapter_title": chapter_title,
+            "chapter_role": chapter_role, "chapter_purpose": chapter_purpose,
+            "characters_involved": characters_involved, "key_items": key_items,
+            "scene_location": scene_location, "foreshadowing": foreshadowing,
+            "suspense_level": suspense_level, "plot_twist_level": plot_twist_level,
+            "chapter_summary": chapter_summary, "time_constraint": time_constraint
+        }
+        filtered_context = get_filtered_knowledge_context(
+            api_key=api_key, base_url=base_url, model_name=model_name,
+            interface_format=interface_format, embedding_adapter=embedding_adapter,
+            filepath=filepath, chapter_info=chapter_info_for_filter,
+            retrieved_texts=processed, max_tokens=max_tokens, timeout=timeout
+        )
+    except Exception as e:
+        logging.error(f"Outline: knowledge retrieval failed: {e}")
+
+    # ===== 阶段5：生成细纲 =====
+    from prompt_definitions import chapter_outline_prompt
+
+    outline_llm = create_llm_adapter(
+        interface_format=interface_format, base_url=base_url,
+        model_name=model_name, api_key=api_key,
+        temperature=outline_temperature, max_tokens=max_tokens, timeout=timeout
+    )
+
+    outline_prompt_text = chapter_outline_prompt.format(
+        novel_number=novel_number, chapter_title=chapter_title,
+        chapter_role=chapter_role, chapter_purpose=chapter_purpose,
+        suspense_level=suspense_level, foreshadowing=foreshadowing,
+        plot_twist_level=plot_twist_level, chapter_summary=chapter_summary,
+        word_number=word_number, characters_involved=characters_involved,
+        key_items=key_items, scene_location=scene_location,
+        time_constraint=time_constraint, user_guidance=safe_guidance,
+        next_chapter_role=next_chapter_role,
+        next_chapter_purpose=next_chapter_purpose,
+        next_chapter_summary=next_chapter_summary,
+        global_summary=global_summary_text,
+        character_state=character_state_text,
+        previous_excerpt=previous_excerpt,
+        short_summary=short_summary,
+        filtered_context=filtered_context
+    )
+
+    try:
+        outline_text = invoke_with_cleaning(outline_llm, outline_prompt_text)
+        if outline_text:
+            outline_dir = os.path.join(filepath, "outlines")
+            os.makedirs(outline_dir, exist_ok=True)
+            outline_file = os.path.join(outline_dir, f"outline_{novel_number}.txt")
+            save_string_to_txt(outline_text, outline_file)
+            logging.info(f"Chapter outline saved to outlines/outline_{novel_number}.txt")
+            return outline_text
+        else:
+            logging.warning("Chapter outline generation returned empty result")
+            return "（细纲生成失败）"
+    except Exception as e:
+        logging.error(f"Error generating chapter outline: {str(e)}")
+        return "（细纲生成失败）"
+
 def build_chapter_prompt(
     api_key: str,
     base_url: str,
@@ -299,6 +536,7 @@ def build_chapter_prompt(
     1. 优化知识库检索流程
     2. 新增内容重复检测机制
     3. 集成提示词应用规则
+    4. 细纲由独立步骤生成（生成细纲 → 生成草稿）
     """
     # 读取基础文件
     arch_file = os.path.join(filepath, "Novel_architecture.txt")
@@ -337,6 +575,7 @@ def build_chapter_prompt(
 
     # 第一章特殊处理
     if novel_number == 1:
+        chapter_outline = _read_outline_from_file(filepath, novel_number)
         return first_chapter_draft_prompt.format(
             novel_number=novel_number,
             word_number=word_number,
@@ -352,7 +591,8 @@ def build_chapter_prompt(
             scene_location=scene_location,
             time_constraint=time_constraint,
             user_guidance=user_guidance,
-            novel_setting=novel_architecture_text
+            novel_setting=novel_architecture_text,
+            chapter_outline=chapter_outline
         )
 
     # 获取前文内容和摘要
@@ -543,6 +783,9 @@ def build_chapter_prompt(
     except Exception as e:
         logging.error(f"Error filtering character state: {str(e)}")
 
+    # 从 outlines/ 目录读取已生成的细纲（需先通过 UI 生成细纲）
+    chapter_outline = _read_outline_from_file(filepath, novel_number)
+
     # 返回最终提示词（使用过滤后的 global_summary 和 character_state）
     return next_chapter_draft_prompt.format(
         user_guidance=user_guidance if user_guidance else "无特殊指导",
@@ -571,7 +814,8 @@ def build_chapter_prompt(
         next_chapter_foreshadowing=next_chapter_foreshadow,
         next_chapter_plot_twist_level=next_chapter_twist,
         next_chapter_summary=next_chapter_summary,
-        filtered_context=filtered_context
+        filtered_context=filtered_context,
+        chapter_outline=chapter_outline
     )
 
 def generate_chapter_draft(
